@@ -1,75 +1,97 @@
-/**
- * Welcome to Cloudflare Workers! This is your first worker.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your worker in action
- * - Run `npm run deploy` to publish your worker
- *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
+// proxy-checker-worker.js
 
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const ip = url.searchParams.get("ip");
-    const port = url.searchParams.get("port") || "443";
-
-    if (!ip || !port) {
-      return new Response(JSON.stringify({ error: "Parameter 'ip' dan 'port' diperlukan." }), { status: 400 });
-    }
-
-    const metaURL = "https://myapicheck.mayumiapi.workers.dev";
-
-    try {
-      const oriRes = await fetch(metaURL);
-      const oriData = await oriRes.json();
-      const oriIp = oriData.clientIp;
-
-      const start = Date.now();
-      const proxyRes = await fetch(`${metaURL}api/v1?proxy=${ip}:${port}`);
-      const proxyData = await proxyRes.json();
-      const proxyIp = proxyData.clientIp;
-
-      if (proxyIp && oriIp !== proxyIp) {
-        const delayMs = Date.now() - start;
-
-        return new Response(JSON.stringify({
-          status: "active",
-          ip,
-          port,
-          delayMs,
-          proxyIp,
-          asn: proxyData.asn,
-          country: proxyData.country,
-          city: proxyData.city,
-          regionCode: proxyData.regionCode,
-          asOrganization: proxyData.asOrganization,
-          tlsVersion: proxyData.tlsVersion,
-          timezone: proxyData.timezone,
-          latitude: proxyData.latitude,
-          longitude: proxyData.longitude,
-          colo: proxyData.colo
-        }, null, 2), { headers: { "Content-Type": "application/json" } });
-      } else {
-        return new Response(JSON.stringify({
-          status: "dead",
-          ip,
-          port,
-          message: "Proxy tidak menyembunyikan IP asli (tidak aktif)"
-        }, null, 2), { headers: { "Content-Type": "application/json" } });
-      }
-
-    } catch (err) {
-      return new Response(JSON.stringify({
-        status: "not active",
-        ip,
-        port,
-        message: "Proxy tidak dapat dihubungi atau gagal mendapatkan data",
-        error: err.toString()
-      }, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
-    }
+    const proxyIp = url.searchParams.get('ip') || "185.169.107.99";
+    const proxyPort = url.searchParams.get('port') || "443";
+    
+    return await checkProxy(proxyIp, proxyPort);
   }
 };
+
+async function checkProxy(proxyIp, proxyPort) {
+  const startTime = Date.now();
+  
+  try {
+    // First, check if the proxy is responding at all
+    // Note: This is a basic check and doesn't verify if it works as a proxy
+    const proxyCheckUrl = `http://${proxyIp}:${proxyPort}`;
+    let proxyActive = false;
+    
+    try {
+      // Try to connect to the proxy directly
+      const proxyResponse = await fetch(proxyCheckUrl, { 
+        method: 'HEAD',
+        cf: { timeout: 5000 } // 5 second timeout
+      });
+      proxyActive = proxyResponse.status < 500; // Consider any non-server error as "active"
+    } catch (proxyError) {
+      // If we can't connect directly, try HTTPS
+      try {
+        const proxyHttpsUrl = `https://${proxyIp}:${proxyPort}`;
+        const proxyHttpsResponse = await fetch(proxyHttpsUrl, { 
+          method: 'HEAD',
+          cf: { timeout: 5000 }
+        });
+        proxyActive = proxyHttpsResponse.status < 500;
+      } catch (httpsError) {
+        proxyActive = false;
+      }
+    }
+    
+    // Now get information about the proxy IP from the API
+    const infoResponse = await fetch("https://myapicheck.mayumiapi.workers.dev/");
+    const proxyInfo = await infoResponse.json();
+    
+    const endTime = Date.now();
+    const delay = endTime - startTime;
+    
+    // Create result object
+    const result = {
+      status: proxyActive ? "ACTIVE" : "INACTIVE",
+      ip: proxyIp,
+      port: proxyPort,
+      colo: proxyInfo.colo || "N/A",
+      organization: proxyInfo.asOrganization || "N/A",
+      asn: proxyInfo.asn || "N/A",
+      country: proxyInfo.country || "N/A",
+      city: "N/A", // Not provided in the sample response
+      longitude: proxyInfo.longitude || "N/A",
+      latitude: proxyInfo.latitude || "N/A",
+      timezone: proxyInfo.timezone || "N/A",
+      tcpRtt: proxyInfo.clientTcpRtt || "N/A",
+      totalDelay: `${delay} ms`
+    };
+    
+    // Return formatted response
+    return new Response(JSON.stringify(result, null, 2), {
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*"
+      }
+    });
+    
+  } catch (error) {
+    const endTime = Date.now();
+    const delay = endTime - startTime;
+    
+    // Create error result
+    const errorResult = {
+      status: "FAILED TO CHECK",
+      ip: proxyIp,
+      port: proxyPort,
+      error: error.message,
+      totalDelay: `${delay} ms`
+    };
+    
+    // Return error response
+    return new Response(JSON.stringify(errorResult, null, 2), {
+      status: 500,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*"
+      }
+    });
+  }
+}
