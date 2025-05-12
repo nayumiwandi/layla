@@ -21,7 +21,7 @@ export default {
       return new Response(JSON.stringify({ error: "Parameter 'ip' dan 'port' diperlukan." }), { status: 400 });
     }
 
-    const metaURL = "myapicheck.mayumiapi.workers.dev";
+    const metaURL = "https://myapicheck.mayumiapi.workers.dev";
 
     try {
       const oriRes = await fetch(metaURL);
@@ -55,7 +55,7 @@ export default {
         }, null, 2), { headers: { "Content-Type": "application/json" } });
       } else {
         return new Response(JSON.stringify({
-          status: "not active",
+          status: "dead",
           ip,
           port,
           message: "Proxy tidak menyembunyikan IP asli (tidak aktif)"
